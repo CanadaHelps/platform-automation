@@ -6,11 +6,12 @@ name: Deploy to Azure App Service
 # Usage example:
 #   jobs:
 #     deploy-beta:
-#       uses: CanadaHelps/.github/.github/workflows/azure-deploy.yml@v1
+#       uses: CanadaHelps/platform-automation/.github/workflows/azure-deploy.yml@main
 #       with:
 #         web-app-name: app-cc-deop-poc-beta
 #         image-tag: ccdeoppoc.azurecr.io/givingbasket:develop-abc1234
 #         resource-group: rg-cc-deop-poc
+#         environment: beta
 #       secrets:
 #         AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
 #         AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -39,6 +40,10 @@ on:
         description: 'Optional startup command override'
         type: string
         default: ''
+      environment:
+        description: 'GitHub environment for OIDC and deployment protection rules (e.g. beta, uat, production)'
+        type: string
+        required: true
     secrets:
       AZURE_CLIENT_ID:
         description: 'Client ID of the User-Assigned Managed Identity for OIDC'
@@ -54,6 +59,7 @@ jobs:
   deploy:
     name: Deploy to ${{ inputs.web-app-name }}
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     permissions:
       contents: read
       id-token: write
