@@ -1,0 +1,124 @@
+name: Deploy to Azure App Service
+
+# Reusable workflow — deploys a container image to Azure App Service.
+# Uses OIDC authentication (no stored credentials).
+#
+# Usage example:
+#   jobs:
+#     deploy-beta:
+#       uses: CanadaHelps/.github/.github/workflows/azure-deploy.yml@v1
+#       with:
+#         web-app-name: app-cc-deop-poc-beta
+#         image-tag: ccdeoppoc.azurecr.io/givingbasket:develop-abc1234
+#         resource-group: rg-cc-deop-poc
+#       secrets:
+#         AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+#         AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+#         AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+on:
+  workflow_call:
+    inputs:
+      web-app-name:
+        description: 'Azure App Service web app name'
+        type: string
+        required: true
+      image-tag:
+        description: 'Full container image tag (e.g. ccdeoppoc.azurecr.io/givingbasket:develop-abc1234)'
+        type: string
+        required: true
+      resource-group:
+        description: 'Azure resource group containing the web app'
+        type: string
+        required: true
+      registry:
+        description: 'ACR login server (e.g. ccdeoppoc.azurecr.io)'
+        type: string
+        default: ''
+      startup-command:
+        description: 'Optional startup command override'
+        type: string
+        default: ''
+    secrets:
+      AZURE_CLIENT_ID:
+        description: 'Client ID of the User-Assigned Managed Identity for OIDC'
+        required: true
+      AZURE_TENANT_ID:
+        description: 'Azure Active Directory tenant ID'
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Azure subscription ID'
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.web-app-name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
+
+      - name: Set subscription
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy container image
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az webapp config container set \
+              --name ${{ inputs.web-app-name }} \
+              --resource-group ${{ inputs.resource-group }} \
+              --container-image-name "${{ inputs.image-tag }}" \
+              --container-registry-url "https://${{ inputs.registry }}"
+
+      - name: Set startup command
+        if: inputs.startup-command != ''
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az webapp config set \
+              --name ${{ inputs.web-app-name }} \
+              --resource-group ${{ inputs.resource-group }} \
+              --startup-file "${{ inputs.startup-command }}"
+
+      - name: Restart app
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az webapp restart \
+              --name ${{ inputs.web-app-name }} \
+              --resource-group ${{ inputs.resource-group }}
+
+      - name: Verify deployment
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            echo "🚀 Deployed ${{ inputs.image-tag }} to ${{ inputs.web-app-name }}"
+            HOSTNAME=$(az webapp show \
+              --name ${{ inputs.web-app-name }} \
+              --resource-group ${{ inputs.resource-group }} \
+              --query defaultHostName -o tsv)
+            echo "🌐 https://$HOSTNAME"
+            # Wait for app to respond
+            for i in $(seq 1 6); do
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://$HOSTNAME/health" || echo "000")
+              if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "404" ]; then
+                echo "✅ App is responding (HTTP $HTTP_STATUS)"
+                exit 0
+              fi
+              echo "⏳ Waiting for app to start (attempt $i/6, got HTTP $HTTP_STATUS)..."
+              sleep 10
+            done
+            echo "⚠️ App may still be starting — check manually"

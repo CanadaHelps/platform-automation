@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semantic version to release (e.g. 1.2.3 — do NOT include the "v" prefix)'
+        type: string
+        required: true
+      release-notes:
+        description: 'Brief release notes (what changed in this version)'
+        type: string
+        required: true
+  workflow_call:
+    inputs:
+      version:
+        description: 'Semantic version to release (e.g. 1.2.3 — do NOT include the "v" prefix)'
+        type: string
+        required: true
+      release-notes:
+        description: 'Brief release notes (what changed in this version)'
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag & Release v${{ inputs.version }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: version must be in semver format X.Y.Z (e.g. 1.2.3)"
+            exit 1
+          fi
+
+      - name: Check tag does not already exist
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/v${{ inputs.version }}$"; then
+            echo "Error: tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push patch tag (v${{ inputs.version }})
+        run: |
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
+
+      - name: Update floating major tag (v${{ inputs.version.split('.')[0] }})
+        run: |
+          MAJOR=$(echo "${{ inputs.version }}" | cut -d'.' -f1)
+          git tag -f -a "v${MAJOR}" -m "Floating major tag — points to v${{ inputs.version }}"
+          git push origin "v${MAJOR}" --force
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            --title "v${{ inputs.version }}" \
+            --notes "${{ inputs.release-notes }}" \
+            --verify-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

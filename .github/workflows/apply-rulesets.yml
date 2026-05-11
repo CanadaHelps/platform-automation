@@ -1,0 +1,74 @@
+name: Apply Branch Protection Rulesets
+
+on:
+  workflow_call:
+    inputs:
+      ruleset-directory:
+        description: 'Directory containing ruleset JSON files (relative to repo root)'
+        type: string
+        default: 'github/rulesets'
+      dry-run:
+        description: 'Validate JSON without applying rulesets to GitHub'
+        type: boolean
+        default: false
+    secrets:
+      GH_TOKEN:
+        description: 'GitHub token with repo admin permissions to create/update rulesets'
+        required: true
+
+jobs:
+  apply-rulesets:
+    name: Apply Rulesets
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate ruleset JSON files
+        run: |
+          find ${{ inputs.ruleset-directory }} -name '*.json' | while read f; do
+            echo "Validating $f ..."
+            python3 -c "import json, sys; json.load(open('$f'))" && echo "  ✓ valid JSON"
+          done
+
+      - name: Apply rulesets to GitHub
+        if: ${{ !inputs.dry-run }}
+        run: |
+          REPO="${{ github.repository }}"
+          RULESET_DIR="${{ inputs.ruleset-directory }}"
+
+          # Fetch existing rulesets (name → id map)
+          EXISTING=$(gh api "repos/${REPO}/rulesets" --jq '[.[] | {name: .name, id: .id}]')
+
+          for FILE in ${RULESET_DIR}/*.json; do
+            NAME=$(python3 -c "import json; d=json.load(open('${FILE}')); print(d['name'])")
+            echo "Processing ruleset: ${NAME} (from ${FILE})"
+
+            EXISTING_ID=$(echo "${EXISTING}" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          match = next((r['id'] for r in data if r['name'] == '${NAME}'), None)
+          print(match if match else '')
+          ")
+
+            if [ -n "${EXISTING_ID}" ]; then
+              echo "  → Updating existing ruleset id=${EXISTING_ID}"
+              gh api "repos/${REPO}/rulesets/${EXISTING_ID}" \
+                --method PUT \
+                --input "${FILE}" \
+                --jq '"  ✓ Updated: " + .name + " (id=" + (.id|tostring) + ")"'
+            else
+              echo "  → Creating new ruleset"
+              gh api "repos/${REPO}/rulesets" \
+                --method POST \
+                --input "${FILE}" \
+                --jq '"  ✓ Created: " + .name + " (id=" + (.id|tostring) + ")"'
+            fi
+          done
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry-run }}
+        run: |
+          echo "Dry-run mode — rulesets NOT applied. Files that would be applied:"
+          find ${{ inputs.ruleset-directory }} -name '*.json' -exec echo "  - {}" \;

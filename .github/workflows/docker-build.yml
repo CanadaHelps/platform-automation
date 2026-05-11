@@ -1,0 +1,129 @@
+name: Docker Build and Push
+
+# Reusable workflow — called from other repos.
+# Uses ACR Tasks (az acr build) to build Docker images server-side inside Azure.
+# This avoids needing to allow GitHub runner IPs through the ACR firewall.
+# Authentication to ACR uses Azure OIDC (no stored credentials).
+# NuGet token is passed as a --build-arg (consumed via ARG in Dockerfile).
+#
+# Usage example:
+#   jobs:
+#     docker:
+#       uses: CanadaHelps/.github/.github/workflows/docker-build.yml@v1
+#       with:
+#         image-name: givingbasket
+#         registry: ccdeoppoc.azurecr.io
+#         push: true
+#         tags: |
+#           ccdeoppoc.azurecr.io/givingbasket:develop-abc1234
+#           ccdeoppoc.azurecr.io/givingbasket:develop-latest
+#       secrets:
+#         AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+#         AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+#         AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+#         NUGET_TOKEN: ${{ secrets.NUGET_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: 'Image name (without registry prefix, e.g. givingbasket)'
+        type: string
+        required: true
+      registry:
+        description: 'ACR login server (e.g. ccdeoppoc.azurecr.io)'
+        type: string
+        required: true
+      push:
+        description: 'Push the built image to the registry'
+        type: boolean
+        default: false
+      tags:
+        description: 'Newline-separated list of full image tags to apply'
+        type: string
+        required: true
+      dockerfile:
+        description: 'Path to the Dockerfile'
+        type: string
+        default: './Dockerfile'
+      context:
+        description: 'Docker build context path'
+        type: string
+        default: '.'
+    secrets:
+      AZURE_CLIENT_ID:
+        description: 'Client ID of the User-Assigned Managed Identity for OIDC'
+        required: true
+      AZURE_TENANT_ID:
+        description: 'Azure Active Directory tenant ID'
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Azure subscription ID'
+        required: true
+      NUGET_TOKEN:
+        description: 'GitHub PAT or GITHUB_TOKEN with read:packages — passed to Docker as BuildKit secret github_token'
+        required: true
+
+jobs:
+  docker-build:
+    name: Build ${{ inputs.push && 'and Push' || 'only' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # Required for Azure OIDC login
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC — no stored credentials)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
+
+      - name: Set subscription
+        run: az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Parse registry name
+        id: registry
+        run: |
+          # Strip .azurecr.io suffix if present for az acr build --registry
+          REGISTRY_NAME=$(echo "${{ inputs.registry }}" | sed 's/\.azurecr\.io$//')
+          echo "name=$REGISTRY_NAME" >> $GITHUB_OUTPUT
+
+      - name: Build image tags
+        id: tags
+        run: |
+          # Convert newline-separated tags into multiple --image flags
+          IMAGE_FLAGS=""
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            # Strip registry prefix — az acr build adds it automatically
+            IMAGE="${tag#${{ inputs.registry }}/}"
+            IMAGE_FLAGS="$IMAGE_FLAGS --image $IMAGE"
+          done <<< "${{ inputs.tags }}"
+          echo "flags=$IMAGE_FLAGS" >> $GITHUB_OUTPUT
+
+      - name: Build and push via ACR Tasks
+        if: inputs.push
+        run: |
+          az acr build \
+            --registry ${{ steps.registry.outputs.name }} \
+            ${{ steps.tags.outputs.flags }} \
+            --build-arg "GITHUB_TOKEN=${{ secrets.NUGET_TOKEN }}" \
+            --file ${{ inputs.dockerfile }} \
+            ${{ inputs.context }}
+
+      - name: Build only (no push)
+        if: ${{ !inputs.push }}
+        run: |
+          az acr build \
+            --registry ${{ steps.registry.outputs.name }} \
+            --image "${{ inputs.image-name }}:validation" \
+            --no-push \
+            --build-arg "GITHUB_TOKEN=${{ secrets.NUGET_TOKEN }}" \
+            --file ${{ inputs.dockerfile }} \
+            ${{ inputs.context }}

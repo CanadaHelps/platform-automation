@@ -1,0 +1,73 @@
+name: Publish NuGet Package
+
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: 'Path to the .csproj file to pack and publish'
+        type: string
+        required: true
+      dotnet-version:
+        description: '.NET SDK version to install'
+        type: string
+        default: '8.0.x'
+      nuget-source-url:
+        description: 'NuGet source URL to publish to'
+        type: string
+        default: 'https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json'
+      configuration:
+        description: 'Build configuration (Release or Debug)'
+        type: string
+        default: 'Release'
+      version-suffix:
+        description: 'Optional pre-release version suffix (e.g. "beta"). Leave empty for stable release.'
+        type: string
+        default: ''
+    secrets:
+      NUGET_AUTH_TOKEN:
+        description: 'Token for authenticating to GitHub Packages NuGet feed (use secrets.GITHUB_TOKEN from caller)'
+        required: true
+
+jobs:
+  publish:
+    name: Pack & Publish NuGet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ inputs.dotnet-version }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+          source-url: ${{ inputs.nuget-source-url }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.NUGET_AUTH_TOKEN }}
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ inputs.project-path }}
+
+      - name: Pack (with version suffix)
+        if: ${{ inputs.version-suffix != '' }}
+        run: |
+          dotnet pack ${{ inputs.project-path }} \
+            --no-restore \
+            --configuration ${{ inputs.configuration }} \
+            --version-suffix ${{ inputs.version-suffix }} \
+            --include-symbols \
+            --output ./nupkgs
+
+      - name: Pack (stable release)
+        if: ${{ inputs.version-suffix == '' }}
+        run: |
+          dotnet pack ${{ inputs.project-path }} \
+            --no-restore \
+            --configuration ${{ inputs.configuration }} \
+            --include-symbols \
+            --output ./nupkgs
+
+      - name: Publish to GitHub Packages
+        run: |
+          dotnet nuget push ./nupkgs/*.nupkg \
+            --source ${{ inputs.nuget-source-url }} \
+            --api-key ${{ secrets.NUGET_AUTH_TOKEN }} \
+            --skip-duplicate
