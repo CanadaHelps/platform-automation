@@ -58,7 +58,7 @@ jobs:
           git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
           git push origin "v${{ inputs.version }}"
 
-      - name: Update floating major tag (v${{ inputs.version.split('.')[0] }})
+      - name: Update floating major tag
         run: |
           MAJOR=$(echo "${{ inputs.version }}" | cut -d'.' -f1)
           git tag -f -a "v${MAJOR}" -m "Floating major tag — points to v${{ inputs.version }}"
