@@ -1,74 +1,74 @@
-name: Release
+name: Release (Semantic)
+
+# Reusable semantic-release workflow.
+# Caller is responsible for the push/dispatch trigger and passing secrets.
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Semantic version to release (e.g. 1.2.3 — do NOT include the "v" prefix)'
-        type: string
-        required: true
-      release-notes:
-        description: 'Brief release notes (what changed in this version)'
-        type: string
-        required: true
   workflow_call:
     inputs:
-      version:
-        description: 'Semantic version to release (e.g. 1.2.3 — do NOT include the "v" prefix)'
+      node-version:
+        description: 'Node.js version to use'
         type: string
-        required: true
-      release-notes:
-        description: 'Brief release notes (what changed in this version)'
+        default: '20'
+      pre-release-script:
+        description: 'Optional shell command to run before semantic-release (e.g. chmod +x scripts/update-version-prefix.sh)'
         type: string
+        required: false
+    secrets:
+      GH_RUNNER_PAT:
         required: true
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
   release:
-    name: Tag & Release v${{ inputs.version }}
+    name: Semantic Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GH_RUNNER_PAT }}
 
-      - name: Validate version format
-        run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Error: version must be in semver format X.Y.Z (e.g. 1.2.3)"
-            exit 1
-          fi
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
 
-      - name: Check tag does not already exist
-        run: |
-          if git ls-remote --tags origin | grep -q "refs/tags/v${{ inputs.version }}$"; then
-            echo "Error: tag v${{ inputs.version }} already exists"
-            exit 1
-          fi
+      - name: Install release tooling
+        run: npm ci --no-fund --no-audit
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Run pre-release script
+        if: ${{ inputs.pre-release-script != '' }}
+        run: ${{ inputs.pre-release-script }}
 
-      - name: Create and push patch tag (v${{ inputs.version }})
-        run: |
-          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
-
-      - name: Update floating major tag
-        run: |
-          MAJOR=$(echo "${{ inputs.version }}" | cut -d'.' -f1)
-          git tag -f -a "v${MAJOR}" -m "Floating major tag — points to v${{ inputs.version }}"
-          git push origin "v${MAJOR}" --force
-
-      - name: Create GitHub Release
-        run: |
-          gh release create "v${{ inputs.version }}" \
-            --title "v${{ inputs.version }}" \
-            --notes "${{ inputs.release-notes }}" \
-            --verify-tag
+      - name: Run semantic-release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_RUNNER_PAT }}
+          HUSKY: '0'
+        run: npx semantic-release
+
+      - name: Write release summary
+        if: always()
+        run: |
+          git fetch --tags --quiet 2>/dev/null || true
+          LATEST_TAG=$(git tag --sort=-version:refname | head -1)
+          STATUS="${{ job.status }}"
+          STATUS_ICON=$([ "$STATUS" = "success" ] && echo "✅" || echo "❌")
+
+          echo "## ${STATUS_ICON} Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status** | ${STATUS_ICON} \`${STATUS}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Version released** | \`${LATEST_TAG:-none}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Triggered by** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$LATEST_TAG" ]; then
+            echo "| **Release page** | [${LATEST_TAG}](https://github.com/${{ github.repository }}/releases/tag/${LATEST_TAG}) |" >> $GITHUB_STEP_SUMMARY
+          fi
