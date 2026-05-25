@@ -49,18 +49,20 @@ jobs:
         if: github.ref_name != 'main'
         run: |
           # Branch protection on develop/release/* requires PRs — github.token cannot push
-          # commits directly. Strip @semantic-release/git for pre-release channels so tags
-          # and GitHub releases are still created via API without a git push-back.
+          # commits directly. Overwrite .releaserc.json to strip @semantic-release/git so
+          # semantic-release auto-discovers the modified config. Tags and GitHub releases
+          # are still created via API without a direct git push-back.
           python3 << 'EOF'
-          import json, os
-          config = json.load(open('.releaserc.json'))
+          import json, shutil
+          shutil.copy('.releaserc.json', '.releaserc.original.json')
+          config = json.load(open('.releaserc.original.json'))
           config['plugins'] = [
             p for p in config['plugins']
             if not (isinstance(p, list) and p[0] == '@semantic-release/git')
             and p != '@semantic-release/git'
           ]
-          json.dump(config, open('.releaserc.prerelease.json', 'w'), indent=2)
-          print("Pre-release config (no git push-back):")
+          json.dump(config, open('.releaserc.json', 'w'), indent=2)
+          print("Pre-release config written (no @semantic-release/git):")
           print(json.dumps(config, indent=2))
           EOF
 
@@ -68,13 +70,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HUSKY: '0'
-        run: |
-          if [[ "$GITHUB_REF_NAME" != "main" ]] && [[ -f ".releaserc.prerelease.json" ]]; then
-            echo "🔖 Pre-release branch — running without @semantic-release/git push-back"
-            npx semantic-release --extends ./.releaserc.prerelease.json
-          else
-            npx semantic-release
-          fi
+        run: npx semantic-release
 
       - name: Write release summary
         if: always()
