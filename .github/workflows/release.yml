@@ -45,11 +45,36 @@ jobs:
         if: ${{ inputs.pre-release-script != '' }}
         run: ${{ inputs.pre-release-script }}
 
+      - name: Build pre-release config (skip git push-back)
+        if: github.ref_name != 'main'
+        run: |
+          # Branch protection on develop/release/* requires PRs — github.token cannot push
+          # commits directly. Strip @semantic-release/git for pre-release channels so tags
+          # and GitHub releases are still created via API without a git push-back.
+          python3 << 'EOF'
+          import json, os
+          config = json.load(open('.releaserc.json'))
+          config['plugins'] = [
+            p for p in config['plugins']
+            if not (isinstance(p, list) and p[0] == '@semantic-release/git')
+            and p != '@semantic-release/git'
+          ]
+          json.dump(config, open('.releaserc.prerelease.json', 'w'), indent=2)
+          print("Pre-release config (no git push-back):")
+          print(json.dumps(config, indent=2))
+          EOF
+
       - name: Run semantic-release
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HUSKY: '0'
-        run: npx semantic-release
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "main" ]] && [[ -f ".releaserc.prerelease.json" ]]; then
+            echo "🔖 Pre-release branch — running without @semantic-release/git push-back"
+            npx semantic-release --extends ./.releaserc.prerelease.json
+          else
+            npx semantic-release
+          fi
 
       - name: Write release summary
         if: always()
