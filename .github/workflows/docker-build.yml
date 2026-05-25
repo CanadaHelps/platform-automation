@@ -55,6 +55,22 @@ on:
         description: 'GitHub environment for OIDC (e.g. beta, uat, production). When set, the OIDC token subject uses the environment claim instead of the branch ref.'
         type: string
         default: ''
+      build-version:
+        description: 'Semantic version string to bake into the image (e.g. 1.3.0-rc.1). Passed as BUILD_VERSION build arg.'
+        type: string
+        default: ''
+      build-sha:
+        description: 'Git commit SHA to embed in the image. Passed as BUILD_SHA build arg.'
+        type: string
+        default: ''
+      build-branch:
+        description: 'Source branch name to embed in the image. Passed as BUILD_BRANCH build arg.'
+        type: string
+        default: ''
+      build-timestamp:
+        description: 'ISO 8601 build timestamp to embed in the image. Passed as BUILD_TIMESTAMP build arg.'
+        type: string
+        default: ''
     secrets:
       AZURE_CLIENT_ID:
         description: 'Client ID of the User-Assigned Managed Identity for OIDC'
@@ -113,13 +129,24 @@ jobs:
           done <<< "${{ inputs.tags }}"
           echo "flags=$IMAGE_FLAGS" >> $GITHUB_OUTPUT
 
+      - name: Build metadata args
+        id: build-args
+        run: |
+          # Always pass GITHUB_TOKEN; conditionally add version metadata args
+          FLAGS="--build-arg GITHUB_TOKEN=${{ secrets.NUGET_TOKEN }}"
+          [[ -n "${{ inputs.build-version }}"   ]] && FLAGS="$FLAGS --build-arg BUILD_VERSION=${{ inputs.build-version }}"
+          [[ -n "${{ inputs.build-sha }}"        ]] && FLAGS="$FLAGS --build-arg BUILD_SHA=${{ inputs.build-sha }}"
+          [[ -n "${{ inputs.build-branch }}"     ]] && FLAGS="$FLAGS --build-arg BUILD_BRANCH=${{ inputs.build-branch }}"
+          [[ -n "${{ inputs.build-timestamp }}"  ]] && FLAGS="$FLAGS --build-arg BUILD_TIMESTAMP=${{ inputs.build-timestamp }}"
+          echo "flags=$FLAGS" >> $GITHUB_OUTPUT
+
       - name: Build and push via ACR Tasks
         if: inputs.push
         run: |
           az acr build \
             --registry ${{ steps.registry.outputs.name }} \
             ${{ steps.tags.outputs.flags }} \
-            --build-arg "GITHUB_TOKEN=${{ secrets.NUGET_TOKEN }}" \
+            ${{ steps.build-args.outputs.flags }} \
             --file ${{ inputs.dockerfile }} \
             ${{ inputs.context }}
 
@@ -130,6 +157,6 @@ jobs:
             --registry ${{ steps.registry.outputs.name }} \
             --image "${{ inputs.image-name }}:validation" \
             --no-push \
-            --build-arg "GITHUB_TOKEN=${{ secrets.NUGET_TOKEN }}" \
+            ${{ steps.build-args.outputs.flags }} \
             --file ${{ inputs.dockerfile }} \
             ${{ inputs.context }}
