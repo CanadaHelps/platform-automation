@@ -46,9 +46,8 @@ jobs:
         run: ${{ inputs.pre-release-script }}
 
       - name: Build pre-release config (skip git push-back)
-        if: github.ref_name != 'main'
         run: |
-          # Branch protection on develop/release/* requires PRs — github.token cannot push
+          # Branch protection on all branches requires PRs — github.token cannot push
           # commits directly. Overwrite .releaserc.json to strip @semantic-release/git so
           # semantic-release auto-discovers the modified config. Tags and GitHub releases
           # are still created via API without a direct git push-back.
