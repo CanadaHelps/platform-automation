@@ -71,6 +71,16 @@ on:
         description: 'ISO 8601 build timestamp to embed in the image. Passed as BUILD_TIMESTAMP build arg.'
         type: string
         default: ''
+      extra-build-args:
+        description: |
+          Additional Docker build args, one per line in KEY=VALUE form. Useful for mono-repo
+          Dockerfiles that need per-app parameters (e.g. PROJECT_DIR, PROJECT_NAME).
+          Example:
+            extra-build-args: |
+              PROJECT_DIR=Services/BlobManager/Src/CanadaHelps.BlobManager
+              PROJECT_NAME=CanadaHelps.BlobManager
+        type: string
+        default: ''
     secrets:
       AZURE_CLIENT_ID:
         description: 'Client ID of the User-Assigned Managed Identity for OIDC'
@@ -138,6 +148,18 @@ jobs:
           [[ -n "${{ inputs.build-sha }}"        ]] && FLAGS="$FLAGS --build-arg BUILD_SHA=${{ inputs.build-sha }}"
           [[ -n "${{ inputs.build-branch }}"     ]] && FLAGS="$FLAGS --build-arg BUILD_BRANCH=${{ inputs.build-branch }}"
           [[ -n "${{ inputs.build-timestamp }}"  ]] && FLAGS="$FLAGS --build-arg BUILD_TIMESTAMP=${{ inputs.build-timestamp }}"
+
+          # Append any caller-supplied extra build args (one KEY=VALUE per line)
+          EXTRA_ARGS=$(cat <<'EOF'
+          ${{ inputs.extra-build-args }}
+          EOF
+          )
+          while IFS= read -r line; do
+            line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -z "$line" ] && continue
+            FLAGS="$FLAGS --build-arg $line"
+          done <<< "$EXTRA_ARGS"
+
           echo "flags=$FLAGS" >> $GITHUB_OUTPUT
 
       - name: Build and push via ACR Tasks
